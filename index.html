@@ -188,8 +188,10 @@ function drawScene(c,lay,sc){
     }
     c.globalAlpha=1;
     const s=.34+r.flash*.12;
-    c.shadowColor=r.k.c;c.shadowBlur=sc*.5;c.fillStyle=r.k.c;c.fillRect(x-s/2,y-s/2,s,s);
-    c.shadowBlur=0;c.strokeStyle="rgba(255,255,255,.8)";c.lineWidth=.04;c.strokeRect(x-s/2,y-s/2,s,s);
+    const gl=c.createRadialGradient(x,y,0,x,y,.75);gl.addColorStop(0,r.k.c+"aa");gl.addColorStop(1,r.k.c+"00");
+    c.fillStyle=gl;c.fillRect(x-.75,y-.75,1.5,1.5);
+    c.fillStyle=r.k.c;c.fillRect(x-s/2,y-s/2,s,s);
+    c.strokeStyle="rgba(255,255,255,.8)";c.lineWidth=.04;c.strokeRect(x-s/2,y-s/2,s,s);
   }
   c.restore();
 }
@@ -204,10 +206,12 @@ function startRec(){
     const u=pw/100,sc=94*u/W;
     const mimes=["video/mp4;codecs=avc1,mp4a.40.2","video/mp4;codecs=avc1","video/mp4","video/webm;codecs=vp9,opus","video/webm;codecs=vp8,opus","video/webm"];
     const mt=mimes.find(m=>MediaRecorder.isTypeSupported(m))||"";
-    const stream=cvs.captureStream(60);
+    const fps=pw>=2160?30:60;
+    let stream=cvs.captureStream(0),manual=!!(stream.getVideoTracks()[0]&&stream.getVideoTracks()[0].requestFrame);
+    if(!manual)stream=cvs.captureStream(fps);
     if(musicOn&&recDest)recDest.stream.getAudioTracks().forEach(t=>stream.addTrack(t));
-    const mr=new MediaRecorder(stream,{mimeType:mt||undefined,videoBitsPerSecond:pw>=2160?45e6:18e6,audioBitsPerSecond:192000});
-    const c={mr,mt,chunks:[],cancelled:false,cvs,rc:cvs.getContext("2d"),u,sc,lay:makeLayer(sc),pw,ph};
+    const mr=new MediaRecorder(stream,{mimeType:mt||undefined,videoBitsPerSecond:pw>=2160?30e6:16e6,audioBitsPerSecond:192000});
+    const c={mr,mt,fps,manual,track:stream.getVideoTracks()[0],last:0,chunks:[],cancelled:false,cvs,rc:cvs.getContext("2d"),u,sc,lay:makeLayer(sc),pw,ph};
     mr.ondataavailable=e=>{if(e.data&&e.data.size)c.chunks.push(e.data)};
     mr.onstop=()=>finishRec(c);
     mr.onerror=e=>setStatus("Recording error: "+(e.error&&e.error.message||"unknown"));
@@ -251,7 +255,7 @@ function recFrame(c){
   drawScene(rc,c.lay,c.sc);
   if(mtxt.lines.length){
     const fs=(mtxt.small?10:14)*u;rc.font="900 "+fs+"px system-ui,sans-serif";rc.textBaseline="middle";
-    rc.shadowColor="rgba(0,0,0,.7)";rc.shadowBlur=3*u;rc.shadowOffsetY=.6*u;rc.fillStyle=mtxt.color;
+    rc.shadowColor="rgba(0,0,0,.7)";rc.shadowBlur=1.5*u;rc.shadowOffsetY=.6*u;rc.fillStyle=mtxt.color;
     const n=mtxt.lines.length;
     mtxt.lines.forEach((t,i)=>rc.fillText(t,mw/2,mh/2+(i-(n-1)/2)*fs*1.05));
   }
@@ -260,28 +264,35 @@ function recFrame(c){
   const chip=COLORS.map((k,i)=>{const t=String(wins[i]);return{k,t,w:5*u+1.6*u+rc.measureText(t).width}});
   const tot=chip.reduce((a,o)=>a+o.w,0)+3*u*3;let x=(pw-tot)/2;const cy=my+mh+8*u;
   for(const o of chip){
-    rc.shadowColor=o.k.c;rc.shadowBlur=2.5*u;rc.fillStyle=o.k.c;rc.fillRect(x,cy-2.5*u,5*u,5*u);rc.shadowBlur=0;
+    rc.fillStyle=o.k.c;rc.fillRect(x,cy-2.5*u,5*u,5*u);
     rc.fillText(o.t,x+6.6*u,cy+.2*u);x+=o.w+3*u;
   }
 }
 
 function loop(t){
-  const dt=Math.min(.05,(t-lastT)/1000||0);lastT=t;pulse+=dt*4;
-  if(state==="count"){
-    cd-=dt;const n=Math.ceil(cd);setMsg([n>0?String(n):"GO!"]);
-    if(cd<=0){state="run";ya=.6}
-  }
-  if(state==="run"){
-    if(ya>0){ya-=dt;if(ya<=0)setMsg([])}
-    acc+=dt;while(acc>=1/60){step(1/60);acc-=1/60;if(winner)break}
-    if(winner){
-      state="done";musicFade();addWin(winner.i);setMsg([winner.k.n.toUpperCase(),"WINS!"],winner.k.c,true);
-      const c=cur;if(c)setTimeout(()=>{if(cur===c)stopRec(true)},2500);
+  requestAnimationFrame(loop); // primero: así un error puntual nunca congela el juego
+  try{
+    const dt=Math.min(.05,(t-lastT)/1000||0);lastT=t;pulse+=dt*4;
+    if(state==="count"){
+      cd-=dt;const n=Math.ceil(cd);setMsg([n>0?String(n):"GO!"]);
+      if(cd<=0){state="run";ya=.6}
     }
-  }
-  ctx.setTransform(1,0,0,1,0,0);drawScene(ctx,layer,ts*dpr);
-  if(cur)recFrame(cur);
-  requestAnimationFrame(loop);
+    if(state==="run"){
+      if(ya>0){ya-=dt;if(ya<=0)setMsg([])}
+      acc+=dt;while(acc>=1/60){step(1/60);acc-=1/60;if(winner)break}
+      if(winner){
+        state="done";musicFade();addWin(winner.i);setMsg([winner.k.n.toUpperCase(),"WINS!"],winner.k.c,true);
+        const c=cur;if(c)setTimeout(()=>{if(cur===c)stopRec(true)},2500);
+      }
+    }
+    const doRec=cur&&(t-cur.last>=1000/cur.fps-3);
+    if(!cur||doRec){ctx.setTransform(1,0,0,1,0,0);drawScene(ctx,layer,ts*dpr)}
+    if(doRec){
+      cur.last=t;
+      try{recFrame(cur);if(cur.manual)cur.track.requestFrame()}
+      catch(e){stopRec(false);setStatus("Recording stopped: "+(e&&e.message||"error")+". Try Full HD.")}
+    }
+  }catch(e){console.error(e)}
 }
 /* ---------- Marcador persistente (Realtime Database) ---------- */
 const dbRef=ref(fdb,"stats/wins");
