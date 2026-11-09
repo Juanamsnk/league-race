@@ -46,16 +46,17 @@ canvas{width:100%;display:block;border-radius:calc(var(--u)*2);box-shadow:0 0 ca
 </div>
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
-import { getFirestore, doc, onSnapshot, setDoc } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
+import { getDatabase, ref, onValue, set, runTransaction } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-database.js";
 const firebaseConfig = {
   apiKey: "AIzaSyD39W2eCzb4_16erMmDy0WzpiWL0C05L_A",
   authDomain: "league-race.firebaseapp.com",
+  databaseURL: "https://league-race-default-rtdb.firebaseio.com",
   projectId: "league-race",
   storageBucket: "league-race.firebasestorage.app",
   messagingSenderId: "837960999540",
   appId: "1:837960999540:web:85073d781aaca6b5baa721"
 };
-const fdb = getFirestore(initializeApp(firebaseConfig));
+const fdb = getDatabase(initializeApp(firebaseConfig));
 const CW=13,CH=19,W=2*CW+1,H=2*CH+1;
 const COLORS=[{n:"Rojo",c:"#ff3b4e"},{n:"Azul",c:"#3b82ff"},{n:"Amarillo",c:"#ffd426"},{n:"Verde",c:"#2ee66b"}];
 const OFF=[[-.17,-.17],[.17,-.17],[-.17,.17],[.17,.17]];
@@ -260,14 +261,19 @@ function loop(t){
   if(cur)recFrame(cur);
   requestAnimationFrame(loop);
 }
-/* ---------- Marcador persistente (Firestore) ---------- */
-const dbRef=doc(fdb,"stats","wins");
-const saveWins=()=>setDoc(dbRef,{w0:wins[0],w1:wins[1],w2:wins[2],w3:wins[3]}).catch(e=>setStatus("No se pudo guardar el marcador ("+(e&&e.code||"error")+")"));
-function addWin(i){wins[i]++;renderScore();saveWins()}
+/* ---------- Marcador persistente (Realtime Database) ---------- */
+const dbRef=ref(fdb,"stats/wins");
+const err=e=>setStatus("No se pudo guardar el marcador ("+(e&&e.code||"error")+")");
+const saveWins=()=>set(dbRef,{w0:wins[0],w1:wins[1],w2:wins[2],w3:wins[3]}).catch(err);
+function addWin(i){
+  wins[i]++;renderScore();
+  runTransaction(dbRef,cur=>{cur=cur||{};for(let k=0;k<4;k++)cur["w"+k]=+cur["w"+k]||0;cur["w"+i]++;return cur}).catch(err);
+}
 function initDb(){
-  onSnapshot(dbRef,snap=>{
-    if(snap.exists()){const d=snap.data();wins=[0,1,2,3].map(i=>+d["w"+i]||0);renderScore()}
-  },e=>setStatus("El marcador no se guardará ("+(e&&e.code||"error")+")"));
+  onValue(dbRef,snap=>{
+    const d=snap.val();
+    if(d){wins=[0,1,2,3].map(i=>+d["w"+i]||0);renderScore()}
+  },e=>setStatus("El marcador no se sincroniza ("+(e&&e.code||"error")+")"));
 }
 let armed=false;
 document.getElementById("rs").onclick=function(){
