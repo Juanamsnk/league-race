@@ -37,6 +37,7 @@ canvas{width:100%;display:block;border-radius:calc(var(--u)*2);box-shadow:0 0 ca
 <button id="rec" class="sec">🎬 Recording mode</button>
 <button id="exp" class="sec">⏺ Export video: NO</button>
 <button id="mu" class="sec">🔊 Music: ON</button>
+<button id="sf" class="sec">🔔 SFX: ON</button>
 <select id="q"><option value="2160">4K · 2160×3840</option><option value="1080">Full HD · 1080×1920</option></select>
 <button id="dl" class="sec" hidden>⬇ Download video</button>
 <button id="rs" class="sec">↺ Reset scoreboard</button>
@@ -143,7 +144,10 @@ function pick(r){
     opts.push({nx,ny,back,w});
   }
   const nb=opts.filter(o=>!o.back),list=nb.length?nb:opts;
+  // choque: hay pared justo delante de la bola (esquina, giro o callejón sin salida)
+  const wall=r.lx>=0&&grid[r.y+(r.y-r.ly)][r.x+(r.x-r.lx)]===1;
   if(!nb.length)r.flash=1;
+  if(wall||!nb.length)collide(r);
   let s=list.reduce((a,o)=>a+o.w,0),p=Math.random()*s;
   for(const o of list){p-=o.w;if(p<=0)return o}
   return list[0];
@@ -153,7 +157,7 @@ function play(){
   if(cur)stopRec(false);
   applyDiff();gen();size();winner=null;state="count";cd=3.99;ya=0;setMsg([]);
   racers.forEach(r=>{const o=pick(r);r.nx=o.nx;r.ny=o.ny;r.t=0});
-  acc=0;musicStart();
+  acc=0;initAudio();if(actx)actx.resume();musicStart();
   if(recOn)startRec();
 }
 
@@ -202,7 +206,77 @@ function drawScene(c,lay,sc){
 /* ---------- Grabación y exportación ---------- */
 let recOn=false,cur=null,lastBlob=null,lastName="";
 const expBtn=document.getElementById("exp"),dlBtn=document.getElementById("dl"),qSel=document.getElementById("q");
+let mp4=null;
+const MUXER_URL="https://cdn.jsdelivr.net/npm/mp4-muxer@5.1.3/build/mp4-muxer.mjs";
+const BR=pw=>pw>=2160?25e6:12e6;
+async function detectMp4(){
+  try{
+    if(!(window.VideoEncoder&&window.AudioEncoder&&window.VideoFrame&&window.AudioData&&window.OfflineAudioContext))return;
+    const M=await import(MUXER_URL),vc={};
+    for(const pw of[1080,2160]){
+      const ph=pw*16/9,fps=pw>=2160?30:60;
+      for(const codec of(pw>=2160?["avc1.640033","avc1.4d0033","avc1.640032"]:["avc1.64002a","avc1.4d002a","avc1.640028"])){
+        const r=await VideoEncoder.isConfigSupported({codec,width:pw,height:ph,bitrate:BR(pw),framerate:fps});
+        if(r&&r.supported){vc[pw]=codec;break}
+      }
+    }
+    const a=await AudioEncoder.isConfigSupported({codec:"mp4a.40.2",sampleRate:48000,numberOfChannels:2,bitrate:192000});
+    if(a&&a.supported&&(vc[1080]||vc[2160]))mp4={M,vc};
+  }catch(e){mp4=null}
+  setStatus(mp4?"MP4 export ready (H.264 + AAC)":"This browser will record with its built-in recorder (MP4 or WebM)");
+}
+function startWC(pw,ph){
+  const fps=pw>=2160?30:60,u=pw/100,mw=Math.min(94*u,(ph-41.5*u)*W/H),sc=mw/W;
+  const cvs=document.createElement("canvas");cvs.width=pw;cvs.height=ph;
+  const muxer=new mp4.M.Muxer({target:new mp4.M.ArrayBufferTarget(),video:{codec:"avc",width:pw,height:ph},audio:{codec:"aac",numberOfChannels:2,sampleRate:48000},fastStart:"in-memory",firstTimestampBehavior:"offset"});
+  const c={wc:true,muxer,fps,last:0,t0:null,lastT:0,n:0,sfx:[],winT:null,musicT0:musicOn?musicT0:null,cancelled:false,failed:null,cvs,rc:cvs.getContext("2d"),u,sc,lay:makeLayer(sc),pw,ph,mw};
+  c.venc=new VideoEncoder({output:(ch,meta)=>{try{muxer.addVideoChunk(ch,meta)}catch(e){c.failed=e}},error:e=>{c.failed=e}});
+  c.venc.configure({codec:mp4.vc[pw],width:pw,height:ph,bitrate:BR(pw),framerate:fps});
+  cur=c;setStatus("● Recording MP4 at "+pw+"×"+ph+"…");
+}
+function wcPush(c,t){
+  if(c.failed){stopRec(false);setStatus("Recording stopped: "+(c.failed.message||"encoder error")+". Try Full HD.");return}
+  if(c.t0===null)c.t0=t;
+  if(c.venc.encodeQueueSize>8)return;
+  const f=new VideoFrame(c.cvs,{timestamp:Math.round((t-c.t0)*1000),duration:Math.round(1e6/c.fps)});
+  c.venc.encode(f,{keyFrame:c.n%(c.fps*2)===0});f.close();c.n++;c.lastT=t;
+}
+async function finishWC(c){
+  try{
+    setStatus("Finishing MP4 (audio + encoding)…");
+    await c.venc.flush();
+    const dur=Math.max(.5,(c.lastT-c.t0)/1000+.05),SR=48000,off=new OfflineAudioContext(2,Math.ceil(dur*SR),SR);
+    const master=off.createGain();master.connect(off.destination);
+    if(c.musicT0!==null){
+      try{
+        const ab=await(await fetch("musica_carrera_100_loop.mp3")).arrayBuffer(),buf=await off.decodeAudioData(ab);
+        const src=off.createBufferSource(),mg=off.createGain();src.buffer=buf;src.loop=true;src.connect(mg);mg.connect(master);
+        const o=Math.max(0,(c.t0-c.musicT0)/1000)%buf.duration;src.start(0,o);
+        if(c.winT!==null){const tw=Math.max(0,(c.winT-c.t0)/1000);mg.gain.setValueAtTime(1,tw);mg.gain.linearRampToValueAtTime(0,tw+2.2)}
+      }catch(e){console.warn("music not added",e)}
+    }
+    const sg=off.createGain();sg.gain.value=.5;sg.connect(master);
+    for(const e of c.sfx){const w=(e.t-c.t0)/1000;if(w>=0&&w<dur)playSfx(off,sg,w,e.i,e.n)}
+    const out=await off.startRendering(),L=out.getChannelData(0),Rr=out.getChannelData(1);
+    const aenc=new AudioEncoder({output:(ch,meta)=>c.muxer.addAudioChunk(ch,meta),error:e=>{c.failed=e}});
+    aenc.configure({codec:"mp4a.40.2",sampleRate:SR,numberOfChannels:2,bitrate:192000});
+    const CH=SR;
+    for(let i=0;i<L.length;i+=CH){
+      const n=Math.min(CH,L.length-i),d=new Float32Array(n*2);d.set(L.subarray(i,i+n),0);d.set(Rr.subarray(i,i+n),n);
+      const ad=new AudioData({format:"f32-planar",sampleRate:SR,numberOfFrames:n,numberOfChannels:2,timestamp:Math.round(i/SR*1e6),data:d});
+      aenc.encode(ad);ad.close();
+    }
+    await aenc.flush();aenc.close();c.venc.close();
+    if(c.failed)throw c.failed;
+    c.muxer.finalize();
+    lastBlob=new Blob([c.muxer.target.buffer],{type:"video/mp4"});
+    lastName="maze-race-"+c.pw+"p-"+Date.now()+".mp4";
+    dlBtn.hidden=false;saveLast();
+  }catch(e){console.error(e);setStatus("MP4 export failed: "+(e&&e.message||"error")+". Try Full HD or another browser.")}
+}
 function startRec(){
+  const pw0=+qSel.value;
+  if(mp4&&mp4.vc[pw0]){try{startWC(pw0,pw0*16/9)}catch(e){cur=null;setStatus("Could not record: "+e.message)}return}
   try{
     if(!window.MediaRecorder)throw new Error("this browser does not support MediaRecorder");
     const pw=+qSel.value,ph=pw*16/9,cvs=document.createElement("canvas");cvs.width=pw;cvs.height=ph;
@@ -223,6 +297,11 @@ function startRec(){
 }
 function stopRec(save){
   const c=cur;if(!c)return;cur=null;c.cancelled=!save;
+  if(c.wc){
+    if(save&&c.n>0)finishWC(c);
+    else{try{c.venc.close()}catch(e){}setStatus("")}
+    return;
+  }
   if(c.mr.state!=="inactive")c.mr.stop();
   if(!save)setStatus("");
 }
@@ -285,14 +364,14 @@ function loop(t){
       acc+=dt;while(acc>=1/60){step(1/60);acc-=1/60;if(winner)break}
       if(winner){
         state="done";musicFade();addWin(winner.i);setMsg([winner.k.n.toUpperCase(),"WINS!"],winner.k.c,true);
-        const c=cur;if(c)setTimeout(()=>{if(cur===c)stopRec(true)},2500);
+        const c=cur;if(c)c.winT=t;if(c)setTimeout(()=>{if(cur===c)stopRec(true)},2500);
       }
     }
     const doRec=cur&&(t-cur.last>=1000/cur.fps-3);
     if(!cur||doRec){ctx.setTransform(1,0,0,1,0,0);drawScene(ctx,layer,ts*dpr)}
     if(doRec){
       cur.last=t;
-      try{recFrame(cur);if(cur.manual)cur.track.requestFrame()}
+      try{recFrame(cur);if(cur.wc)wcPush(cur,t);else if(cur.manual)cur.track.requestFrame()}
       catch(e){stopRec(false);setStatus("Recording stopped: "+(e&&e.message||"error")+". Try Full HD.")}
     }
   }catch(e){console.error(e)}
@@ -318,27 +397,52 @@ document.getElementById("rs").onclick=function(){
 };
 /* ---------- Música ---------- */
 const music=new Audio("musica_carrera_100_loop.mp3");music.loop=true;music.preload="auto";
-let actx=null,gain=null,recDest=null,musicOn=true;
+let actx=null,gain=null,sfxGain=null,recDest=null,musicOn=true,sfxOn=true,musicT0=0;
 function initAudio(){
   if(actx)return;
   try{
     actx=new(window.AudioContext||window.webkitAudioContext)();
     const src=actx.createMediaElementSource(music);
-    gain=actx.createGain();recDest=actx.createMediaStreamDestination();
-    src.connect(gain);gain.connect(actx.destination);gain.connect(recDest);
+    gain=actx.createGain();sfxGain=actx.createGain();sfxGain.gain.value=.5;recDest=actx.createMediaStreamDestination();
+    src.connect(gain);
+    [gain,sfxGain].forEach(n=>{n.connect(actx.destination);n.connect(recDest)});
   }catch(e){actx=null;recDest=null}
 }
 function musicStart(){
   if(!musicOn)return;
   initAudio();
   if(actx){actx.resume();gain.gain.cancelScheduledValues(actx.currentTime);gain.gain.setValueAtTime(1,actx.currentTime)}
-  music.currentTime=0;music.play().catch(()=>setStatus("Tap the screen to enable music"));
+  music.currentTime=0;musicT0=performance.now();music.play().catch(()=>setStatus("Tap the screen to enable music"));
 }
 function musicFade(){
   if(!actx||music.paused)return;
   const t=actx.currentTime;gain.gain.cancelScheduledValues(t);gain.gain.setValueAtTime(gain.gain.value,t);gain.gain.linearRampToValueAtTime(0,t+2.2);
   setTimeout(()=>{if(state==="done")music.pause()},2400);
 }
+/* ---------- Sonido de choque: uno distinto por cada bola ---------- */
+const SFX=[
+  {type:"square",f:196,m:[1,1.25,1.5,2],drop:.6,dur:.2,lp:1200},     // Red: golpe grave
+  {type:"sine",f:440,m:[1,1.2,1.5,1.8],drop:.45,dur:.25},            // Blue: bloop
+  {type:"triangle",f:784,m:[1,1.12,1.5,2],drop:1.5,dur:.18},         // Yellow: chirrido agudo
+  {type:"sawtooth",f:330,m:[1,1.33,1.5,2],drop:.7,dur:.22,lp:1800}   // Green: zumbido
+];
+function playSfx(c,dest,when,i,n){
+  const p=SFX[i],o=c.createOscillator(),g=c.createGain(),f=p.f*p.m[n];
+  o.type=p.type;o.frequency.setValueAtTime(f,when);o.frequency.exponentialRampToValueAtTime(Math.max(40,f*p.drop),when+p.dur);
+  g.gain.setValueAtTime(.0001,when);g.gain.exponentialRampToValueAtTime(.45,when+.008);g.gain.exponentialRampToValueAtTime(.0001,when+p.dur);
+  let last=o;
+  if(p.lp){const lp=c.createBiquadFilter();lp.type="lowpass";lp.frequency.value=p.lp;o.connect(lp);last=lp}
+  last.connect(g);g.connect(dest);o.start(when);o.stop(when+p.dur+.02);
+}
+function collide(r){
+  if(state!=="run"||!sfxOn)return;
+  const now=performance.now();
+  if(now-(r.lastSfx||0)<120)return;r.lastSfx=now;
+  const n=Math.random()*4|0;
+  if(actx&&sfxGain)playSfx(actx,sfxGain,actx.currentTime,r.i,n);
+  if(cur&&cur.wc)cur.sfx.push({t:now,i:r.i,n});
+}
+document.getElementById("sf").onclick=function(){sfxOn=!sfxOn;this.textContent="🔔 SFX: "+(sfxOn?"ON":"OFF")};
 document.getElementById("mu").onclick=function(){
   musicOn=!musicOn;this.textContent="🔊 Music: "+(musicOn?"ON":"OFF");
   if(!musicOn)music.pause();
@@ -354,7 +458,7 @@ stage.addEventListener("click",()=>{if(document.body.classList.contains("rec")&&
 addEventListener("keydown",e=>{if(e.code==="Space"||e.code==="Enter"){e.preventDefault();play()}});
 addEventListener("resize",fit);if(window.visualViewport)visualViewport.addEventListener("resize",fit);addEventListener("orientationchange",()=>setTimeout(fit,300));document.addEventListener("fullscreenchange",()=>setTimeout(fit,100));
 document.getElementById("diff").onchange=()=>{music.pause();stopRec(false);applyDiff();gen();winner=null;state="idle";setMsg([]);fit()};
-applyDiff();gen();renderScore();fit();requestAnimationFrame(loop);initDb();
+applyDiff();gen();renderScore();fit();requestAnimationFrame(loop);initDb();detectMp4();
 </script>
 </body>
 </html>
