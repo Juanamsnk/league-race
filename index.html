@@ -35,6 +35,7 @@ canvas{width:100%;display:block;border-radius:calc(var(--u)*2);box-shadow:0 0 ca
 <select id="speed"><option value="1">Normal</option><option value="1.8">Fast</option><option value="3">Very fast</option></select>
 <button id="rec" class="sec">🎬 Recording mode</button>
 <button id="exp" class="sec">⏺ Export video: NO</button>
+<button id="mu" class="sec">🔊 Music: ON</button>
 <select id="q"><option value="2160">4K · 2160×3840</option><option value="1080">Full HD · 1080×1920</option></select>
 <button id="dl" class="sec" hidden>⬇ Download video</button>
 <button id="rs" class="sec">↺ Reset scoreboard</button>
@@ -63,7 +64,7 @@ const DIFFS=[
   {cw:17,ch:24,loop:.02,spd:11,bias:[1.3,.8]},
   {cw:23,ch:33,loop:0,spd:13,bias:[1.4,.9]}
 ];
-let D=DIFFS[0],CW,CH,W,H;
+let D=DIFFS[0],CW,CH,W,H,acc=0;
 function applyDiff(){D=DIFFS[+document.getElementById("diff").value||0];CW=D.cw;CH=D.ch;W=2*CW+1;H=2*CH+1}
 const COLORS=[{n:"Red",c:"#ff3b4e"},{n:"Blue",c:"#3b82ff"},{n:"Yellow",c:"#ffd426"},{n:"Green",c:"#2ee66b"}];
 const OFF=[[-.17,-.17],[.17,-.17],[-.17,.17],[.17,.17]];
@@ -138,6 +139,7 @@ function play(){
   if(cur)stopRec(false);
   applyDiff();gen();size();winner=null;state="count";cd=3.99;ya=0;setMsg([]);
   racers.forEach(r=>{const o=pick(r);r.nx=o.nx;r.ny=o.ny;r.t=0});
+  acc=0;musicStart();
   if(recOn)startRec();
 }
 
@@ -189,9 +191,11 @@ function startRec(){
     if(!window.MediaRecorder)throw new Error("this browser does not support MediaRecorder");
     const pw=+qSel.value,ph=pw*16/9,cvs=document.createElement("canvas");cvs.width=pw;cvs.height=ph;
     const u=pw/100,sc=94*u/W;
-    const mimes=["video/mp4;codecs=avc1","video/mp4","video/webm;codecs=vp9","video/webm;codecs=vp8","video/webm"];
+    const mimes=["video/mp4;codecs=avc1,mp4a.40.2","video/mp4;codecs=avc1","video/mp4","video/webm;codecs=vp9,opus","video/webm;codecs=vp8,opus","video/webm"];
     const mt=mimes.find(m=>MediaRecorder.isTypeSupported(m))||"";
-    const mr=new MediaRecorder(cvs.captureStream(60),{mimeType:mt||undefined,videoBitsPerSecond:pw>=2160?45e6:18e6});
+    const stream=cvs.captureStream(60);
+    if(musicOn&&recDest)recDest.stream.getAudioTracks().forEach(t=>stream.addTrack(t));
+    const mr=new MediaRecorder(stream,{mimeType:mt||undefined,videoBitsPerSecond:pw>=2160?45e6:18e6,audioBitsPerSecond:192000});
     const c={mr,mt,chunks:[],cancelled:false,cvs,rc:cvs.getContext("2d"),u,sc,lay:makeLayer(sc),pw,ph};
     mr.ondataavailable=e=>{if(e.data&&e.data.size)c.chunks.push(e.data)};
     mr.onstop=()=>finishRec(c);
@@ -258,9 +262,9 @@ function loop(t){
   }
   if(state==="run"){
     if(ya>0){ya-=dt;if(ya<=0)setMsg([])}
-    step(dt);
+    acc+=dt;while(acc>=1/60){step(1/60);acc-=1/60;if(winner)break}
     if(winner){
-      state="done";addWin(winner.i);setMsg([winner.k.n.toUpperCase(),"WINS!"],winner.k.c,true);
+      state="done";musicFade();addWin(winner.i);setMsg([winner.k.n.toUpperCase(),"WINS!"],winner.k.c,true);
       const c=cur;if(c)setTimeout(()=>{if(cur===c)stopRec(true)},2500);
     }
   }
@@ -287,6 +291,33 @@ document.getElementById("rs").onclick=function(){
   if(!armed){armed=true;this.textContent="Sure? Tap again";setTimeout(()=>{armed=false;this.textContent="↺ Reset scoreboard"},3000);return}
   armed=false;this.textContent="↺ Reset scoreboard";wins=[0,0,0,0];renderScore();saveWins();
 };
+/* ---------- Música ---------- */
+const music=new Audio("musica_carrera_100_loop.mp3");music.loop=true;music.preload="auto";
+let actx=null,gain=null,recDest=null,musicOn=true;
+function initAudio(){
+  if(actx)return;
+  try{
+    actx=new(window.AudioContext||window.webkitAudioContext)();
+    const src=actx.createMediaElementSource(music);
+    gain=actx.createGain();recDest=actx.createMediaStreamDestination();
+    src.connect(gain);gain.connect(actx.destination);gain.connect(recDest);
+  }catch(e){actx=null;recDest=null}
+}
+function musicStart(){
+  if(!musicOn)return;
+  initAudio();
+  if(actx){actx.resume();gain.gain.cancelScheduledValues(actx.currentTime);gain.gain.setValueAtTime(1,actx.currentTime)}
+  music.currentTime=0;music.play().catch(()=>setStatus("Tap the screen to enable music"));
+}
+function musicFade(){
+  if(!actx||music.paused)return;
+  const t=actx.currentTime;gain.gain.cancelScheduledValues(t);gain.gain.setValueAtTime(gain.gain.value,t);gain.gain.linearRampToValueAtTime(0,t+2.2);
+  setTimeout(()=>{if(state==="done")music.pause()},2400);
+}
+document.getElementById("mu").onclick=function(){
+  musicOn=!musicOn;this.textContent="🔊 Music: "+(musicOn?"ON":"OFF");
+  if(!musicOn)music.pause();
+};
 document.getElementById("play").onclick=play;
 document.getElementById("rec").onclick=()=>{document.body.classList.add("rec");fit()};
 expBtn.onclick=()=>{recOn=!recOn;expBtn.textContent="⏺ Export video: "+(recOn?"YES":"NO");expBtn.classList.toggle("on",recOn);setStatus(recOn?"Each race will be recorded from the countdown to the finish and exported when it ends.":"")};
@@ -297,7 +328,7 @@ stage.addEventListener("pointerdown",()=>{lpFired=false;lp=setTimeout(()=>{if(do
 stage.addEventListener("click",()=>{if(document.body.classList.contains("rec")&&!lpFired)play()});
 addEventListener("keydown",e=>{if(e.code==="Space"||e.code==="Enter"){e.preventDefault();play()}});
 addEventListener("resize",fit);
-document.getElementById("diff").onchange=()=>{stopRec(false);applyDiff();gen();winner=null;state="idle";setMsg([]);fit()};
+document.getElementById("diff").onchange=()=>{music.pause();stopRec(false);applyDiff();gen();winner=null;state="idle";setMsg([]);fit()};
 applyDiff();gen();renderScore();fit();requestAnimationFrame(loop);initDb();
 </script>
 </body>
