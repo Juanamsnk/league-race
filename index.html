@@ -31,7 +31,7 @@ canvas{width:100%;display:block;border-radius:calc(var(--u)*2);box-shadow:0 0 ca
 <body>
 <div class="bar">
 <button id="play">▶ Play</button>
-<select id="diff"><option value="0">Normal</option><option value="1">Hard</option><option value="2">Extreme</option></select>
+<select id="diff"><option value="0">Easy</option><option value="1" selected>Normal</option><option value="2">Hard</option><option value="3">Extreme</option></select>
 <select id="speed"><option value="1">Normal</option><option value="1.8">Fast</option><option value="3">Very fast</option></select>
 <button id="rec" class="sec">🎬 Recording mode</button>
 <button id="exp" class="sec">⏺ Export video: NO</button>
@@ -59,13 +59,14 @@ const firebaseConfig = {
   appId: "1:837960999540:web:85073d781aaca6b5baa721"
 };
 const fdb = getDatabase(initializeApp(firebaseConfig));
-const DIFFS=[
-  {cw:13,ch:19,loop:.04,spd:9,bias:[1.2,.7]},
-  {cw:17,ch:24,loop:.02,spd:11,bias:[1.3,.8]},
-  {cw:23,ch:33,loop:0,spd:13,bias:[1.4,.9]}
+const DIFFS=[ // objetivo: Easy 20-40s, Normal 40-60s, Hard 50-75s, Extreme 60-90s
+  {cw:9,ch:14,loop:.06,spd:6,bias:[1,.4],ramp:60,assist:4},
+  {cw:13,ch:19,loop:.04,spd:5.8,bias:[1,.4],ramp:60,assist:4},
+  {cw:17,ch:24,loop:.02,spd:7.5,bias:[1,.4],ramp:60,assist:4},
+  {cw:23,ch:33,loop:0,spd:13,bias:[1,.4],ramp:40,assist:3}
 ];
-let D=DIFFS[0],CW,CH,W,H,acc=0;
-function applyDiff(){D=DIFFS[+document.getElementById("diff").value||0];CW=D.cw;CH=D.ch;W=2*CW+1;H=2*CH+1}
+let D=DIFFS[1],CW,CH,W,H,acc=0,gdist;
+function applyDiff(){D=DIFFS[+document.getElementById("diff").value];CW=D.cw;CH=D.ch;W=2*CW+1;H=2*CH+1}
 const COLORS=[{n:"Red",c:"#ff3b4e"},{n:"Blue",c:"#3b82ff"},{n:"Yellow",c:"#ffd426"},{n:"Green",c:"#2ee66b"}];
 const OFF=[[-.17,-.17],[.17,-.17],[-.17,.17],[.17,.17]];
 const cv=document.getElementById("c"),ctx=cv.getContext("2d"),msg=document.getElementById("msg"),stage=document.getElementById("stage"),bar=document.querySelector(".bar"),st=document.getElementById("st");
@@ -96,8 +97,16 @@ function gen(){
     for(const[a,b]of[[1,0],[-1,0],[0,1],[0,-1]]){const nx=x+a,ny=y+b;if(!grid[ny][nx]&&d[ny][nx]<0){d[ny][nx]=d[y][x]+1;q.push([nx,ny])}}
   }
   goal=far;
+  // salida = punto más lejano de la meta (recorrido siempre largo y parejo) + mapa de distancias a la meta
+  gdist=new Int32Array(W*H).fill(-1);gdist[goal[1]*W+goal[0]]=0;
+  const gq=[goal];let last=goal;
+  for(let i=0;i<gq.length;i++){
+    const[x,y]=gq[i];last=gq[i];
+    for(const[a,b]of[[1,0],[-1,0],[0,1],[0,-1]]){const nx=x+a,ny=y+b;if(!grid[ny][nx]&&gdist[ny*W+nx]<0){gdist[ny*W+nx]=gdist[y*W+x]+1;gq.push([nx,ny])}}
+  }
+  start=last;
   racers=COLORS.map((k,i)=>({k,i,x:start[0],y:start[1],px:start[0],py:start[1],nx:start[0],ny:start[1],t:1,lx:-1,ly:-1,
-    bias:D.bias[0]+Math.random()*D.bias[1],spd:.92+Math.random()*.16,trail:[],flash:0,v:new Uint16Array(W*H)}));
+    bias:D.bias[0]+Math.random()*D.bias[1],spd:.92+Math.random()*.16,trail:[],flash:0,el:0,v:new Uint16Array(W*H)}));
 }
 
 function makeLayer(sc){
@@ -126,7 +135,9 @@ function pick(r){
     const nx=r.x+a,ny=r.y+b;if(grid[ny][nx])continue;
     const back=nx===r.lx&&ny===r.ly;
     const closer=Math.abs(nx-goal[0])+Math.abs(ny-goal[1])<Math.abs(r.x-goal[0])+Math.abs(r.y-goal[1]);
-    opts.push({nx,ny,back,w:(closer?r.bias:1)*(back?.02:1)/(1+1.5*r.v[ny*W+nx])});
+    let w=(closer?r.bias:1)*(back?.02:1)/(1+1.5*r.v[ny*W+nx]);
+    if(gdist[ny*W+nx]<gdist[r.y*W+r.x])w*=1+(r.el/D.ramp)**2*D.assist;
+    opts.push({nx,ny,back,w});
   }
   const nb=opts.filter(o=>!o.back),list=nb.length?nb:opts;
   if(!nb.length)r.flash=1;
@@ -154,7 +165,7 @@ function step(dt){
     }
     if(winner===r){r.px=r.x;r.py=r.y}
     else{r.px=r.x+(r.nx-r.x)*Math.min(r.t,1);r.py=r.y+(r.ny-r.y)*Math.min(r.t,1)}
-    r.flash=Math.max(0,r.flash-dt*4);
+    r.flash=Math.max(0,r.flash-dt*4);r.el+=dt;
     const x=r.px+.5+OFF[r.i][0],y=r.py+.5+OFF[r.i][1];
     r.trail.push([x,y]);if(r.trail.length>45)r.trail.shift();
   }
