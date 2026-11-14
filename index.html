@@ -125,7 +125,7 @@ function placeKnife(){
     if(!best)break;x=best[0];y=best[1];
   }
   if(path.length<4)return;
-  const p=path[Math.floor(path.length*(.3+Math.random()*.4))];
+  const p=path[Math.max(3,Math.floor(path.length*(.08+Math.random()*.14)))];
   knife={x:p[0],y:p[1],held:null};
 }
 function drawKnife(c,x,y,s,rot){
