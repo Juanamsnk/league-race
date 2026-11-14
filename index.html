@@ -24,6 +24,7 @@ button.on{background:#ff3b4e;border-color:#ff3b4e;color:#fff}
 canvas{width:100%;display:block;border-radius:calc(var(--u)*2);box-shadow:0 0 calc(var(--u)*6) rgba(80,110,255,.25)}
 #msg{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;font-weight:900;font-size:calc(var(--u)*14);color:#fff;text-shadow:0 calc(var(--u)*.6) calc(var(--u)*3) rgba(0,0,0,.7);pointer-events:none;line-height:1}
 #msg.small{font-size:calc(var(--u)*10)}
+#pick{position:absolute;left:0;right:0;top:50%;transform:translateY(calc(-50% - var(--u)*13));text-align:center;font-weight:900;font-size:calc(var(--u)*7.2);letter-spacing:.04em;text-transform:uppercase;color:#fff;text-shadow:0 calc(var(--u)*.6) calc(var(--u)*3) rgba(0,0,0,.7);pointer-events:none;line-height:1;display:none}
 .score{display:flex;gap:calc(var(--u)*3);justify-content:center}
 .chip{display:flex;align-items:center;gap:calc(var(--u)*1.6);font-weight:800;font-size:calc(var(--u)*6)}
 .chip i{display:block;width:calc(var(--u)*5);height:calc(var(--u)*5);border-radius:calc(var(--u)*1);box-shadow:0 0 calc(var(--u)*2.5) currentColor}
@@ -38,6 +39,7 @@ canvas{width:100%;display:block;border-radius:calc(var(--u)*2);box-shadow:0 0 ca
 <button id="exp" class="sec">⏺ Export video: NO</button>
 <button id="mu" class="sec">🔊 Music: ON</button>
 <button id="sf" class="sec">🔔 SFX: ON</button>
+<button id="kn" class="sec">🔪 Knife: OFF</button>
 <select id="q"><option value="2160">4K · 2160×3840</option><option value="1080">Full HD · 1080×1920</option></select>
 <button id="dl" class="sec" hidden>⬇ Download video</button>
 <button id="rs" class="sec">↺ Reset scoreboard</button>
@@ -45,7 +47,7 @@ canvas{width:100%;display:block;border-radius:calc(var(--u)*2);box-shadow:0 0 ca
 </div>
 <div class="stage" id="stage">
 <div class="top" id="top"><h1>Who will reach<br>100 first?</h1><p>Red · Blue · Yellow · Green</p></div>
-<div class="cw"><canvas id="c"></canvas><div id="msg"></div></div>
+<div class="cw"><canvas id="c"></canvas><div id="msg"></div><div id="pick">Pick your color!</div></div>
 <div class="score" id="score"></div>
 </div>
 <script type="module">
@@ -74,6 +76,9 @@ const OFF=[[-.17,-.17],[.17,-.17],[-.17,.17],[.17,.17]];
 const cv=document.getElementById("c"),ctx=cv.getContext("2d"),msg=document.getElementById("msg"),stage=document.getElementById("stage"),bar=document.querySelector(".bar"),st=document.getElementById("st");
 let grid,start,goal,racers=[],state="idle",ts=22,dpr=1,layer,lastT=0,cd=0,ya=0,winner=null,pulse=0,wins=[0,0,0,0];
 let mtxt={lines:[],color:"#fff",small:false};
+let pickOn=false,lastN=null,knifeOn=false,knife=null;
+const pickEl=document.getElementById("pick");
+const setPick=on=>{pickOn=on;pickEl.style.display=on?"block":"none"};
 const score=document.getElementById("score");
 const setStatus=t=>{st.textContent=t};
 function setMsg(lines,color,small){mtxt={lines,color:color||"#fff",small:!!small};msg.className=small?"small":"";msg.style.color=mtxt.color;msg.innerHTML=lines.join("<br>")}
@@ -108,7 +113,29 @@ function gen(){
   }
   start=last;
   racers=COLORS.map((k,i)=>({k,i,x:start[0],y:start[1],px:start[0],py:start[1],nx:start[0],ny:start[1],t:1,lx:-1,ly:-1,
-    bias:D.bias[0]+Math.random()*D.bias[1],spd:.92+Math.random()*.16,trail:[],flash:0,el:0,v:new Uint16Array(W*H)}));
+    bias:D.bias[0]+Math.random()*D.bias[1],spd:.92+Math.random()*.16,trail:[],flash:0,el:0,dead:false,knife:false,v:new Uint16Array(W*H)}));
+}
+
+function placeKnife(){
+  knife=null;if(!knifeOn||!gdist)return;
+  const path=[];let x=start[0],y=start[1];
+  while(gdist[y*W+x]>0){
+    path.push([x,y]);let best=null;
+    for(const[a,b]of[[1,0],[-1,0],[0,1],[0,-1]]){const nx=x+a,ny=y+b;if(!grid[ny][nx]&&gdist[ny*W+nx]===gdist[y*W+x]-1){best=[nx,ny];break}}
+    if(!best)break;x=best[0];y=best[1];
+  }
+  if(path.length<4)return;
+  const p=path[Math.floor(path.length*(.3+Math.random()*.4))];
+  knife={x:p[0],y:p[1],held:null};
+}
+function drawKnife(c,x,y,s,rot){
+  c.save();c.translate(x,y);c.rotate(rot);c.scale(s,s);c.translate(-.12,0);
+  c.fillStyle="#e9edf7";c.strokeStyle="rgba(0,0,0,.65)";c.lineWidth=.035;
+  c.beginPath();c.moveTo(0,-.1);c.lineTo(.42,-.1);c.quadraticCurveTo(.6,-.07,.64,.08);c.lineTo(0,.08);c.closePath();c.fill();c.stroke();
+  c.fillStyle="#9aa3bd";c.fillRect(0,.035,.5,.04);
+  c.fillStyle="#d4aa4c";c.fillRect(-.07,-.15,.07,.27);
+  c.fillStyle="#7a4a2a";c.fillRect(-.38,-.075,.31,.15);c.strokeRect(-.38,-.075,.31,.15);
+  c.restore();
 }
 
 function makeLayer(sc){
@@ -155,7 +182,7 @@ function pick(r){
 
 function play(){
   if(cur)stopRec(false);
-  applyDiff();gen();size();winner=null;state="count";cd=3.99;ya=0;setMsg([]);
+  applyDiff();gen();placeKnife();size();winner=null;state="count";cd=3.99;ya=0;lastN=null;setMsg([]);setPick(false);
   racers.forEach(r=>{const o=pick(r);r.nx=o.nx;r.ny=o.ny;r.t=0});
   acc=0;initAudio();if(actx)actx.resume();musicStart();
   if(recOn)startRec();
@@ -164,6 +191,7 @@ function play(){
 function step(dt){
   const sp=+document.getElementById("speed").value*D.spd;
   for(const r of racers){
+    if(r.dead){r.flash=Math.max(0,r.flash-dt*4);if(r.trail.length)r.trail.shift();continue}
     r.t+=sp*r.spd*dt;
     while(r.t>=1&&!winner){
       r.t-=1;r.lx=r.x;r.ly=r.y;r.x=r.nx;r.y=r.ny;r.v[r.y*W+r.x]++;
@@ -176,6 +204,19 @@ function step(dt){
     const x=r.px+.5+OFF[r.i][0],y=r.py+.5+OFF[r.i][1];
     r.trail.push([x,y]);if(r.trail.length>45)r.trail.shift();
   }
+  if(knife&&!knife.held){
+    for(const r of racers){
+      if(!r.dead&&Math.hypot(r.px-knife.x,r.py-knife.y)<.5){knife.held=r;r.knife=true;r.flash=1;knifeSfx("pick");break}
+    }
+  }else if(knife&&knife.held){
+    const h=knife.held;let hit=null,bd=.55;
+    for(const o of racers){
+      if(o===h||o.dead)continue;
+      const d=Math.hypot(h.px-o.px,h.py-o.py);
+      if(d<bd){bd=d;hit=o}
+    }
+    if(hit){hit.dead=true;hit.flash=1;h.knife=false;h.flash=1;knife=null;knifeSfx("kill")}
+  }
 }
 
 function drawScene(c,lay,sc){
@@ -186,6 +227,12 @@ function drawScene(c,lay,sc){
   c.fillStyle="#fff";c.fillRect(gx,gy,s0,s0);c.fillStyle="#111";
   for(let i=0;i<4;i++)for(let j=0;j<4;j++)if((i+j)%2===0)c.fillRect(gx+i*s0/4,gy+j*s0/4,s0/4,s0/4);
   c.strokeStyle="#fff";c.globalAlpha=.3;c.lineWidth=.06;c.strokeRect(start[0]+.1,start[1]+.1,.8,.8);c.globalAlpha=1;
+  if(knife&&!knife.held){
+    const kx=knife.x+.5,ky=knife.y+.5+.05*Math.sin(pulse*1.5);
+    const kg=c.createRadialGradient(kx,ky,0,kx,ky,.95);kg.addColorStop(0,"rgba(255,255,255,.55)");kg.addColorStop(1,"rgba(255,255,255,0)");
+    c.fillStyle=kg;c.fillRect(kx-1,ky-1,2,2);
+    drawKnife(c,kx,ky,1.15,-Math.PI/4+.12*Math.sin(pulse));
+  }
   for(const r of racers){
     const x=r.px+.5+OFF[r.i][0],y=r.py+.5+OFF[r.i][1],T=r.trail;
     c.lineCap="round";c.lineJoin="round";
@@ -194,11 +241,17 @@ function drawScene(c,lay,sc){
       c.beginPath();c.moveTo(T[i-1][0],T[i-1][1]);c.lineTo(T[i][0],T[i][1]);c.stroke();
     }
     c.globalAlpha=1;
+    if(r.dead){
+      c.globalAlpha=.4;c.fillStyle=r.k.c;c.fillRect(x-.17,y-.17,.34,.34);c.globalAlpha=1;
+      c.strokeStyle="#fff";c.lineWidth=.07;c.beginPath();c.moveTo(x-.2,y-.2);c.lineTo(x+.2,y+.2);c.moveTo(x+.2,y-.2);c.lineTo(x-.2,y+.2);c.stroke();
+      continue;
+    }
     const s=.34+r.flash*.12;
     const gl=c.createRadialGradient(x,y,0,x,y,.75);gl.addColorStop(0,r.k.c+"aa");gl.addColorStop(1,r.k.c+"00");
     c.fillStyle=gl;c.fillRect(x-.75,y-.75,1.5,1.5);
     c.fillStyle=r.k.c;c.fillRect(x-s/2,y-s/2,s,s);
     c.strokeStyle="rgba(255,255,255,.8)";c.lineWidth=.04;c.strokeRect(x-s/2,y-s/2,s,s);
+    if(r.knife)drawKnife(c,x+.24,y-.24,.8,-Math.PI/4);
   }
   c.restore();
 }
@@ -256,7 +309,13 @@ async function finishWC(c){
       }catch(e){console.warn("music not added",e)}
     }
     const sg=off.createGain();sg.gain.value=.5;sg.connect(master);
-    for(const e of c.sfx){const w=(e.t-c.t0)/1000;if(w>=0&&w<dur)playSfx(off,sg,w,e.i,e.n)}
+    const bg=off.createGain();bg.gain.value=.55;bg.connect(master);
+    for(const e of c.sfx){
+      const w=(e.t-c.t0)/1000;if(w<-.05||w>=dur)continue;const ww=Math.max(0,w);
+      if(e.k==="beep")playBeep(off,bg,ww,e.go);
+      else if(e.k==="pick"||e.k==="kill")playKnife(off,sg,ww,e.k);
+      else playSfx(off,sg,ww,e.i,e.n);
+    }
     const out=await off.startRendering(),L=out.getChannelData(0),Rr=out.getChannelData(1);
     const aenc=new AudioEncoder({output:(ch,meta)=>c.muxer.addAudioChunk(ch,meta),error:e=>{c.failed=e}});
     aenc.configure({codec:"mp4a.40.2",sampleRate:SR,numberOfChannels:2,bitrate:192000});
@@ -286,7 +345,7 @@ function startRec(){
     const fps=pw>=2160?30:60;
     let stream=cvs.captureStream(0),manual=!!(stream.getVideoTracks()[0]&&stream.getVideoTracks()[0].requestFrame);
     if(!manual)stream=cvs.captureStream(fps);
-    if(musicOn&&recDest)recDest.stream.getAudioTracks().forEach(t=>stream.addTrack(t));
+    if(recDest)recDest.stream.getAudioTracks().forEach(t=>stream.addTrack(t));
     const mr=new MediaRecorder(stream,{mimeType:mt||undefined,videoBitsPerSecond:pw>=2160?30e6:16e6,audioBitsPerSecond:192000});
     const c={mr,mt,fps,manual,track:stream.getVideoTracks()[0],last:0,chunks:[],cancelled:false,cvs,rc:cvs.getContext("2d"),u,sc,lay:makeLayer(sc),pw,ph,mw};
     mr.ondataavailable=e=>{if(e.data&&e.data.size)c.chunks.push(e.data)};
@@ -341,7 +400,15 @@ function recFrame(c){
     const n=mtxt.lines.length;
     mtxt.lines.forEach((t,i)=>rc.fillText(t,mw/2,mh/2+(i-(n-1)/2)*fs*1.05));
   }
+  if(pickOn){
+    rc.textAlign="center";rc.textBaseline="middle";rc.font="900 "+7.2*u+"px system-ui,sans-serif";
+    if("letterSpacing"in rc)rc.letterSpacing=.3*u+"px";
+    rc.shadowColor="rgba(0,0,0,.7)";rc.shadowBlur=1.5*u;rc.shadowOffsetY=.6*u;rc.fillStyle="#fff";
+    rc.fillText("PICK YOUR COLOR!",mw/2,mh/2-13*u);
+    if("letterSpacing"in rc)rc.letterSpacing="0px";
+  }
   rc.restore();
+  rc.textAlign="left";
   rc.textBaseline="middle";rc.font="800 "+6*u+"px system-ui,sans-serif";rc.textAlign="left";
   const chip=COLORS.map((k,i)=>{const t=String(wins[i]);return{k,t,w:5*u+1.6*u+rc.measureText(t).width}});
   const tot=chip.reduce((a,o)=>a+o.w,0)+3*u*3;let x=(pw-tot)/2;const cy=my+mh+8*u;
@@ -356,7 +423,8 @@ function loop(t){
   try{
     const dt=Math.min(.05,(t-lastT)/1000||0);lastT=t;pulse+=dt*4;
     if(state==="count"){
-      cd-=dt;const n=Math.ceil(cd);setMsg([n>0?String(n):"GO!"]);
+      cd-=dt;const n=Math.max(0,Math.ceil(cd));setMsg([n>0?String(n):"GO!"]);setPick(n>0);
+      if(n!==lastN){lastN=n;countBeep(n)}
       if(cd<=0){state="run";ya=.6}
     }
     if(state==="run"){
@@ -397,15 +465,15 @@ document.getElementById("rs").onclick=function(){
 };
 /* ---------- Música ---------- */
 const music=new Audio("musica_carrera_100_loop.mp3");music.loop=true;music.preload="auto";
-let actx=null,gain=null,sfxGain=null,recDest=null,musicOn=true,sfxOn=true,musicT0=0;
+let actx=null,gain=null,sfxGain=null,beepGain=null,recDest=null,musicOn=true,sfxOn=true,musicT0=0;
 function initAudio(){
   if(actx)return;
   try{
     actx=new(window.AudioContext||window.webkitAudioContext)();
     const src=actx.createMediaElementSource(music);
-    gain=actx.createGain();sfxGain=actx.createGain();sfxGain.gain.value=.5;recDest=actx.createMediaStreamDestination();
+    gain=actx.createGain();sfxGain=actx.createGain();sfxGain.gain.value=.5;beepGain=actx.createGain();beepGain.gain.value=.55;recDest=actx.createMediaStreamDestination();
     src.connect(gain);
-    [gain,sfxGain].forEach(n=>{n.connect(actx.destination);n.connect(recDest)});
+    [gain,sfxGain,beepGain].forEach(n=>{n.connect(actx.destination);n.connect(recDest)});
   }catch(e){actx=null;recDest=null}
 }
 function musicStart(){
@@ -434,6 +502,41 @@ function playSfx(c,dest,when,i,n){
   if(p.lp){const lp=c.createBiquadFilter();lp.type="lowpass";lp.frequency.value=p.lp;o.connect(lp);last=lp}
   last.connect(g);g.connect(dest);o.start(when);o.stop(when+p.dur+.02);
 }
+/* ---------- Pitidos de salida (4·3·2·1·GO): suenan SIEMPRE, con o sin música/SFX ---------- */
+function playBeep(c,dest,when,go){
+  const f=go?1320:660,dur=go?.85:.3;
+  const lp=c.createBiquadFilter();lp.type="lowpass";lp.frequency.value=3200;
+  const g=c.createGain();
+  g.gain.setValueAtTime(.0001,when);g.gain.exponentialRampToValueAtTime(.7,when+.006);
+  g.gain.setValueAtTime(.7,when+dur-.04);g.gain.exponentialRampToValueAtTime(.0001,when+dur);
+  [["square",f,.5],["sine",f*2,.25]].forEach(([type,fr,v])=>{
+    const o=c.createOscillator(),og=c.createGain();o.type=type;o.frequency.value=fr;og.gain.value=v;
+    o.connect(og);og.connect(lp);o.start(when);o.stop(when+dur+.02);
+  });
+  lp.connect(g);g.connect(dest);
+}
+function countBeep(n){
+  const go=n<=0;
+  if(actx&&beepGain){actx.resume();playBeep(actx,beepGain,actx.currentTime,go)}
+  if(cur&&cur.wc)cur.sfx.push({t:performance.now(),k:"beep",go});
+}
+/* ---------- Sonidos del cuchillo ---------- */
+function playKnife(c,dest,when,kind){
+  const tone=(type,f0,f1,d,v,t0,lpf)=>{
+    const o=c.createOscillator(),g=c.createGain();o.type=type;
+    o.frequency.setValueAtTime(f0,when+t0);o.frequency.exponentialRampToValueAtTime(f1,when+t0+d);
+    g.gain.setValueAtTime(.0001,when+t0);g.gain.exponentialRampToValueAtTime(v,when+t0+.01);g.gain.exponentialRampToValueAtTime(.0001,when+t0+d);
+    let last=o;if(lpf){const lp=c.createBiquadFilter();lp.type="lowpass";lp.frequency.value=lpf;o.connect(lp);last=lp}
+    last.connect(g);g.connect(dest);o.start(when+t0);o.stop(when+t0+d+.02);
+  };
+  if(kind==="pick"){tone("triangle",1400,2800,.2,.3,0);tone("triangle",2100,4200,.22,.25,.05)}
+  else{tone("sawtooth",300,50,.38,.6,0,900);tone("triangle",1800,300,.14,.35,0)}
+}
+function knifeSfx(kind){
+  if(!sfxOn)return;
+  if(actx&&sfxGain)playKnife(actx,sfxGain,actx.currentTime,kind);
+  if(cur&&cur.wc)cur.sfx.push({t:performance.now(),k:kind});
+}
 function collide(r){
   if(state!=="run"||!sfxOn)return;
   const now=performance.now();
@@ -442,6 +545,11 @@ function collide(r){
   if(actx&&sfxGain)playSfx(actx,sfxGain,actx.currentTime,r.i,n);
   if(cur&&cur.wc)cur.sfx.push({t:now,i:r.i,n});
 }
+document.getElementById("kn").onclick=function(){
+  knifeOn=!knifeOn;this.textContent="🔪 Knife: "+(knifeOn?"ON":"OFF");this.classList.toggle("on",knifeOn);
+  if(state!=="run"&&state!=="count")placeKnife();
+  setStatus(knifeOn?"A knife will appear on the route. Grab it and the first color you bump into is out.":"");
+};
 document.getElementById("sf").onclick=function(){sfxOn=!sfxOn;this.textContent="🔔 SFX: "+(sfxOn?"ON":"OFF")};
 document.getElementById("mu").onclick=function(){
   musicOn=!musicOn;this.textContent="🔊 Music: "+(musicOn?"ON":"OFF");
@@ -457,8 +565,8 @@ stage.addEventListener("pointerdown",()=>{lpFired=false;lp=setTimeout(()=>{if(do
 stage.addEventListener("click",()=>{if(document.body.classList.contains("rec")&&!lpFired)play()});
 addEventListener("keydown",e=>{if(e.code==="Space"||e.code==="Enter"){e.preventDefault();play()}});
 addEventListener("resize",fit);if(window.visualViewport)visualViewport.addEventListener("resize",fit);addEventListener("orientationchange",()=>setTimeout(fit,300));document.addEventListener("fullscreenchange",()=>setTimeout(fit,100));
-document.getElementById("diff").onchange=()=>{music.pause();stopRec(false);applyDiff();gen();winner=null;state="idle";setMsg([]);fit()};
-applyDiff();gen();renderScore();fit();requestAnimationFrame(loop);initDb();detectMp4();
+document.getElementById("diff").onchange=()=>{music.pause();stopRec(false);applyDiff();gen();placeKnife();winner=null;state="idle";setMsg([]);setPick(false);fit()};
+applyDiff();gen();placeKnife();renderScore();fit();requestAnimationFrame(loop);initDb();detectMp4();
 </script>
 </body>
 </html>
