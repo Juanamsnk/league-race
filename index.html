@@ -26,6 +26,8 @@ canvas{width:100%;display:block;border-radius:calc(var(--u)*2);box-shadow:0 0 ca
 #msg.small{font-size:calc(var(--u)*10)}
 #day{position:absolute;top:calc(var(--u)*1.3);left:0;right:0;text-align:center;font-size:calc(var(--u)*3.4);font-weight:800;letter-spacing:.16em;text-transform:uppercase;color:#ffd426;line-height:1;pointer-events:none}
 #cday{position:absolute;left:0;right:0;top:50%;transform:translateY(calc(-50% + var(--u)*14));text-align:center;font-weight:900;font-size:calc(var(--u)*8.5);letter-spacing:.12em;text-transform:uppercase;color:#ffd426;text-shadow:0 calc(var(--u)*.6) calc(var(--u)*3) rgba(0,0,0,.7);pointer-events:none;line-height:1;display:none}
+#ver{font-size:.7rem;opacity:.45;letter-spacing:.08em}
+body.rec #ver{display:none}
 #pick{position:absolute;left:0;right:0;top:50%;transform:translateY(calc(-50% - var(--u)*13));text-align:center;font-weight:900;font-size:calc(var(--u)*7.2);letter-spacing:.04em;text-transform:uppercase;color:#fff;text-shadow:0 calc(var(--u)*.6) calc(var(--u)*3) rgba(0,0,0,.7);pointer-events:none;line-height:1;display:none}
 .score{display:flex;gap:calc(var(--u)*3);justify-content:center}
 .chip{display:flex;align-items:center;gap:calc(var(--u)*1.6);font-weight:800;font-size:calc(var(--u)*6)}
@@ -36,12 +38,10 @@ canvas{width:100%;display:block;border-radius:calc(var(--u)*2);box-shadow:0 0 ca
 <div class="bar">
 <button id="play">▶ Play</button>
 <select id="diff"><option value="0">Easy</option><option value="1" selected>Normal</option><option value="2">Hard</option><option value="3">Extreme</option></select>
-<select id="speed"><option value="1">Normal</option><option value="1.8">Fast</option><option value="3">Very fast</option></select>
-<button id="rec" class="sec">🎬 Recording mode</button>
 <button id="exp" class="sec">⏺ Export video: NO</button>
-<button id="mu" class="sec">🔊 Music: ON</button>
+<button id="mu" class="sec">🔊 Music: OFF</button>
 <button id="sf" class="sec">🔔 SFX: ON</button>
-<button id="kn" class="sec">🔪 Knife: OFF</button>
+<button id="kn" class="sec on">🔪 Knife: ON</button>
 <select id="q"><option value="2160">4K · 2160×3840</option><option value="1080">Full HD · 1080×1920</option></select>
 <button id="dl" class="sec" hidden>⬇ Download video</button>
 <button id="rs" class="sec">↺ Reset scoreboard</button>
@@ -53,6 +53,7 @@ canvas{width:100%;display:block;border-radius:calc(var(--u)*2);box-shadow:0 0 ca
 <div class="cw"><canvas id="c"></canvas><div id="msg"></div><div id="pick">Pick your color!</div><div id="cday">Day 1</div></div>
 <div class="score" id="score"></div>
 </div>
+<div id="ver">v0.0.2</div>
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
 import { getDatabase, ref, onValue, set, runTransaction } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-database.js";
@@ -79,7 +80,7 @@ const OFF=[[-.17,-.17],[.17,-.17],[-.17,.17],[.17,.17]];
 const cv=document.getElementById("c"),ctx=cv.getContext("2d"),msg=document.getElementById("msg"),stage=document.getElementById("stage"),bar=document.querySelector(".bar"),st=document.getElementById("st");
 let grid,start,goal,racers=[],state="idle",ts=22,dpr=1,layer,lastT=0,cd=0,ya=0,winner=null,pulse=0,wins=[0,0,0,0];
 let mtxt={lines:[],color:"#fff",small:false};
-let pickOn=false,lastN=null,knifeOn=false,knife=null,raceDay=1;
+let pickOn=false,lastN=null,knifeOn=true,knife=null,raceDay=1;
 const dayEl=document.getElementById("day");
 const totalWins=()=>wins.reduce((a,b)=>a+b,0);
 const curDay=()=>(state==="count"||state==="run"||state==="done")?raceDay:totalWins()+1;
@@ -133,13 +134,13 @@ function placeKnife(){
     if(!best)break;x=best[0];y=best[1];
   }
   if(path.length<4)return;
-  let ji=-1;
+  const js=[];
   for(let i=1;i<path.length;i++){
     const[px,py]=path[i];let n=0;
     for(const[a,b]of[[1,0],[-1,0],[0,1],[0,-1]])if(!grid[py+b][px+a])n++;
-    if(n>=3){ji=i;break}
+    if(n>=3)js.push(i);
   }
-  if(ji<0)ji=Math.min(path.length-1,8);
+  const ji=js.length?js[Math.min(2,js.length-1)]:Math.min(path.length-1,8);
   const p=path[ji];
   knife={x:p[0],y:p[1],held:null};
 }
@@ -164,7 +165,7 @@ function fit(){
   const b=document.body,cs=getComputedStyle(b),rec=b.classList.contains("rec");
   const availW=b.clientWidth-parseFloat(cs.paddingLeft)-parseFloat(cs.paddingRight);
   let availH=b.clientHeight-parseFloat(cs.paddingTop)-parseFloat(cs.paddingBottom);
-  if(!rec)availH-=bar.offsetHeight+10;
+  if(!rec)availH-=bar.offsetHeight+10+(document.getElementById("ver").offsetHeight+10);
   const w=Math.floor(Math.max(180,Math.min(availW,availH*9/16,540)));
   stage.style.width=w+"px";stage.style.height=w*16/9+"px";stage.style.setProperty("--u",w/100+"px");
   size();
@@ -204,7 +205,7 @@ function play(){
 }
 
 function step(dt){
-  const sp=+document.getElementById("speed").value*D.spd;
+  const sp=D.spd;
   for(const r of racers){
     if(r.dead){r.flash=Math.max(0,r.flash-dt*4);if(r.trail.length)r.trail.shift();continue}
     r.t+=sp*r.spd*dt;
@@ -488,7 +489,7 @@ document.getElementById("rs").onclick=function(){
 };
 /* ---------- Música ---------- */
 const music=new Audio("musica_carrera_100_loop.mp3");music.loop=true;music.preload="auto";
-let actx=null,gain=null,sfxGain=null,beepGain=null,recDest=null,musicOn=true,sfxOn=true,musicT0=0;
+let actx=null,gain=null,sfxGain=null,beepGain=null,recDest=null,musicOn=false,sfxOn=true,musicT0=0;
 function initAudio(){
   if(actx)return;
   try{
@@ -579,7 +580,6 @@ document.getElementById("mu").onclick=function(){
   if(!musicOn)music.pause();
 };
 document.getElementById("play").onclick=play;
-document.getElementById("rec").onclick=()=>{document.body.classList.add("rec");fit();try{const r=document.documentElement.requestFullscreen&&document.documentElement.requestFullscreen({navigationUI:"hide"});if(r&&r.catch)r.catch(()=>{})}catch(e){}setTimeout(fit,350)};
 expBtn.onclick=()=>{recOn=!recOn;expBtn.textContent="⏺ Export video: "+(recOn?"YES":"NO");expBtn.classList.toggle("on",recOn);setStatus(recOn?"Each race will be recorded from the countdown to the finish and exported when it ends.":"")};
 dlBtn.onclick=saveLast;
 let lp=null,lpFired=false;
